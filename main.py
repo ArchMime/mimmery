@@ -1,114 +1,170 @@
 # main.py
-from src.database import inicializar_db, obtener_proyectos_unicos, cargar_contexto_dinamico, guardar_sesion
-from src.model_client import listar_modelos_locales, consultar_modelo, autogenerar_memorias
-from src.config import LIMITE_N2_DEFECTO, LIMITE_N3_DEFECTO
+import asyncio
+import sys
+from src.database import (
+    inicializar_db, 
+    obtener_proyectos_unicos, 
+    obtener_o_crear_sesion, 
+    cargar_contexto_base_ordenado, 
+    guardar_mensaje_en_vivo,
+    finalizar_y_consolidar_sesion
+)
+# CAMBIO AQUÍ: Reemplazar 'destilar_memorias_async' por 'destilar_cascada_final_async' y añadir 'destilar_turno_n3_async'
+from src.model_client import (
+    listar_modelos_locales, 
+    consultar_modelo_async, 
+    destilar_cascada_final_async,
+    destilar_turno_n3_async
+)
 
-def solicitar_limite(tipo_nivel, defecto):
-    entrada = input(f"Cantidad de registros para {tipo_nivel} [Por defecto {defecto}]: ").strip()
-    return int(entrada) if entrada.isdigit() else defecto
-
-def main():
+async def main():
+    # Inicialización relacional de la BD
     inicializar_db()
-    print("=== INTERFAZ DE MEMORIA PERSISTENTE MODULAR ===")
+    print("=== ORQUESTADOR DE MEMORIA JERÁRQUICA (MOTOR CENTRAL) ===")
     
-    # 1. SELECCIÓN DE MODELO
+    # 1. SELECCIÓN ASÍNCRONA DE MODELO LOCAL
     modelos = listar_modelos_locales()
     if not modelos:
-        print("\n[!] Error: No se detectó Ollama ejecutándose o no tienes modelos instalados.")
+        print("\n[!] Error: No se detectó Ollama en ejecución o no hay modelos instalados.")
         return
         
-    print("\nModelos disponibles:")
+    print("\nModelos detectados:")
     for i, model in enumerate(modelos, start=1):
         print(f" [{i}] {model}")
-    sel_m = input("\nSelecciona el número del modelo: ").strip()
+    sel_m = input("\nSelecciona el índice del modelo: ").strip()
     modelo_activo = modelos[int(sel_m) - 1] if (sel_m.isdigit() and 1 <= int(sel_m) <= len(modelos)) else modelos[0]
-    print(f"> Modelo activo: '{modelo_activo.upper()}'")
+    print(f"> Modelo asignado: '{modelo_activo.upper()}'")
 
     # 2. SELECCIÓN DE PROYECTO
     proyectos = obtener_proyectos_unicos()
-    print("\nProyectos activos en base de datos:")
-    print(" [0] GLOBAL (Cargar historial general de todo el sistema)")
+    print("\nProyectos registrados en el sistema:")
+    print(" [0] GLOBAL (Antecedentes generales de todo el entorno)")
     for i, proj in enumerate(proyectos, start=1):
         print(f" [{i}] {proj}")
         
-    seleccion = input("\nSelecciona un número o escribe uno NUEVO: ").strip()
+    seleccion = input("\nSelecciona un número o ingresa uno NUEVO: ").strip()
     if seleccion == "0" or seleccion.lower() == "global":
         proyecto_activo = "global"
     elif seleccion.isdigit() and 1 <= int(seleccion) <= len(proyectos):
         proyecto_activo = proyectos[int(seleccion) - 1]
     else:
         proyecto_activo = seleccion if seleccion else "general"
-    print(f"> Proyecto asignado: '{proyecto_activo.upper()}'")
+    print(f"> Ámbito activo: '{proyecto_activo.upper()}'")
 
-    # 3. CONFIGURACIÓN DINÁMICA DE CONTEXTO
-    print("\n--- Ajustes de Ventana de Contexto ---")
-    limite_n2 = solicitar_limite("Nivel 2 (Resúmenes Técnicos)", LIMITE_N2_DEFECTO)
-    limite_n3 = solicitar_limite("Nivel 3 (Conversación Cruda)", LIMITE_N3_DEFECTO)
+    # 3. CONTROL DE RESILIENCIA (Chequeo de Estado Abierto)
+    print("\nVerificando integridad del entorno...")
+    sesion_id, fue_restaurada = obtener_o_crear_sesion(proyecto_activo)
     
-    print("\nCompilando memoria histórica...")
-    contexto_previo = cargar_contexto_dinamico(proyecto_activo, limite_n2, limite_n3)
-    
-    # 4. BUCLE DE CONVERSACIÓN (STREAMING CORREGIDO)
-    historial_sesion = []
-    print(f"\n¡Entorno listo! Escribe 'salir' para finalizar.\n")
+    if fue_restaurada:
+        print(f"⚠️ [AVISO]: Se detectó una sesión previa abierta de forma forzada para el proyecto '{proyecto_activo}'.")
+        print("Restaurando el historial del chat en vivo de manera automática...")
+    else:
+        print(f"✔️ Nueva sesión relacional inicializada con ID: {sesion_id}")
+
+    print("\nCompilando prompt maestro optimizado...")
+    # main.py (Sección del bucle modificada)
+# Reemplaza desde el "while True:" en tu main.py actual
+
+    tareas_fondo = set() # Contenedor para evitar que el recolector de basura elimine las tareas en ejecución
+
+    print(f"\n¡Entorno listo! Escribe 'salir' para cerrar la sesión y consolidar.")
+    print(f"Escribe ':abort' para cerrar de forma forzada simulando un apagón.\n")
     
     while True:
+        contexto_base, historial_l4_acotado = cargar_contexto_base_ordenado(proyecto_activo, sesion_id)
+        
         usuario = input("Tú: ").strip()
         if not usuario:
             continue
         if usuario.lower() == "salir":
             break
+        if usuario == ":abort":
+            print("\n[!] Abortando programa. El estado permanece a salvo en SQLite.")
+            sys.exit(0)
             
-        historial_sesion.append({"role": "user", "content": usuario})
+        guardar_mensaje_en_vivo(sesion_id, "user", usuario)
         
         print(f"\n{modelo_activo}: ", end="", flush=True)
         respuesta_completa = ""
         
-        # Consumo correcto del generador fragmento por fragmento
-        stream = consultar_modelo(modelo_activo, usuario, contexto_previo, historial_sesion[:-1])
-        for chunk in stream:
+        stream = await consultar_modelo_async(modelo_activo, usuario, contexto_base, historial_l4_acotado)
+        async for chunk in stream:
             texto_fragmento = chunk['message']['content']
             print(texto_fragmento, end="", flush=True)
             respuesta_completa += texto_fragmento
         print("\n")
         
-        historial_sesion.append({"role": "assistant", "content": respuesta_completa})
+        guardar_mensaje_en_vivo(sesion_id, "assistant", respuesta_completa)
 
-    # 5. VENTANA DE APROBACIÓN HUMANA
-    if historial_sesion:
-        print("\n" + "="*50)
-        print("PROCESANDO CIERRE: Generando propuestas de memoria...")
-        commit_propuesto, resumen_propuesto = autogenerar_memorias(modelo_activo, historial_sesion)
+        # ----------------------------------------------------------------------
+        # GATILLO EN CALIENTE: Destilación asíncrona del Nivel 3 en segundo plano
+        # ----------------------------------------------------------------------
+        async def proceso_fondo_n3(u, r, s_id):
+            resultado = await destilar_turno_n3_async(modelo_activo, u, r)
+            if resultado:
+                preg_saneada, resp_saneada = resultado
+                # Inyección quirúrgica inmediata en la tabla relacional de Nivel 3
+                with conectar_temporal_para_main() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO nivel3_qna (sesion_id, pregunta, respuesta, timestamp)
+                        VALUES (?, ?, ?, DATETIME('now'))
+                    """, (s_id, preg_saneada, resp_saneada))
+                    conn.commit()
+
+        # Lanzamos la tarea de fondo de forma no bloqueante
+        tarea = asyncio.create_task(proceso_fondo_n3(usuario, respuesta_completa, sesion_id))
+        tareas_fondo.add(tarea)
+        tarea.add_done_callback(tareas_fondo.discard)
+
+    # 5. VENTANA DE CONSOLIDACIÓN RÁPIDA (Al escribir 'salir')
+    print("\n" + "="*60)
+    print("PROCESANDO ENTORNO: Finalizando tareas en segundo plano y consolidando...")
+    
+    # Aseguramos que todas las micro-destilaciones pendientes terminen antes de cerrar
+    if tareas_fondo:
+        await asyncio.gather(*tareas_fondo)
+
+    # Recuperamos todos los Q&A guardados limpiamente durante el día para compilar L2 y L1
+    with conectar_temporal_para_main() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT pregunta, respuesta FROM nivel3_qna WHERE sesion_id = ? ORDER BY id ASC", (sesion_id,))
+        filas_qna = cursor.fetchall()
+        
+    if filas_qna:
+        texto_qna_consolidado = "\n".join([f"Q: {f[0]}\nA: {f[1]}\n---" for f in filas_qna])
+        
+        # Generación veloz de L2 y L1 (El modelo solo lee un par de líneas limpias)
+        commit_propuesto, resumen_propuesto = await destilar_cascada_final_async(modelo_activo, texto_qna_consolidado)
         
         while True:
-            print("\n=== REVISIÓN DE MEMORIA ANTES DE GUARDAR ===")
-            print(f"[PROYECTO]: {proyecto_activo}")
-            print(f"[NIVEL 1 - COMMIT]: {commit_propuesto}")
-            print(f"\n[NIVEL 2 - RESUMEN TÉCNICO]:\n{resumen_propuesto}")
-            print("="*50)
-            print("\nOpciones: [1] Guardar | [2] Editar Commit | [3] Editar Resumen | [4] Cambiar Proyecto | [5] Descartar")
+            print("\n=== AUDITORÍA DE MEMORIA OPTIMIZADA EN CALIENTE ===")
+            print(f"[PROYECTO]: {proyecto_activo.upper()}")
+            print(f"[NIVEL 1 - COMMIT PROPUESTO]: {commit_propuesto}")
+            print(f"\n[NIVEL 2 - RESUMEN ARQUITECTÓNICO]:\n{resumen_propuesto}")
+            print(f"[NIVEL 3]: {len(filas_qna)} bloques Q&A guardados en vivo con éxito.")
+            print("="*60)
             
-            opc = input("Selecciona una opción: ").strip()
+            opc = input("\nOpciones: [1] Aprobar y Guardar | [2] Modificar Commit | [3] Descartar\nSelecciona: ").strip()
             if opc == "1":
-                guardar_sesion(proyecto_activo, commit_propuesto, resumen_propuesto, historial_sesion)
-                print("\n¡Registro inyectado con éxito en SQLite!")
+                finalizar_y_consolidar_sesion(sesion_id, commit_propuesto, resumen_propuesto)
+                print("\n✔️ ¡Éxito! Estructura relacional consolidada velozmente.")
                 break
             elif opc == "2":
-                commit_propuesto = input("\nNuevo Git Commit:\n> ").strip()
+                commit_propuesto = input("\nNuevo Commit:\n> ").strip()
             elif opc == "3":
-                print("\nNuevo Resumen (Presiona Enter y luego Ctrl+D o Ctrl+Z para terminar):")
-                lineas = []
-                while True:
-                    try:
-                        lineas.append(input())
-                    except EOFError:
-                        break
-                resumen_propuesto = "\n".join(lineas).strip()
-            elif opc == "4":
-                proyecto_activo = input("\nNuevo nombre de proyecto:\n> ").strip()
-            elif opc == "5":
-                print("\nSesión cerrada sin guardar cambios.")
+                print("\nCambios descartados.")
                 break
+    else:
+        print("\nNo se registraron interacciones técnicas relevantes en esta sesión. Cerrando de forma limpia.")
+
+
+def conectar_temporal_para_main():
+    """Función de soporte interna exclusiva para la lectura final del chat en main."""
+    import sqlite3
+    from src.config import DB_PATH
+    return sqlite3.connect(DB_PATH)
 
 if __name__ == "__main__":
-    main()
+    # Arrancamos el bucle de eventos asíncronos nativo de Python
+    asyncio.run(main())

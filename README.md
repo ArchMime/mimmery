@@ -26,22 +26,24 @@
 =======================================
 
 Para el portafolio de [@ArchMime](https://github.com/ArchMime/)
+
 ```
 
 
 # mimmery - Local SLM Hierarchical Memory Interface
 
-Una arquitectura ligera de Persistencia de Memoria Jerárquica (RAG Nativo) diseñada para Modelos de Lenguaje Pequeños (SLMs) locales. Este proyecto optimiza la inyección de contexto histórico operando bajo restricciones estrictas de hardware (CPU de 4 hilos, 8 GB de RAM y sin GPU dedicada).
+Una arquitectura ligera de Persistencia de Memoria Jerárquica diseñada para Modelos de Lenguaje Pequeños (SLMs) locales. Este proyecto optimiza la inyección de contexto histórico operando bajo restricciones estrictas de hardware (CPU de 4 hilos, 8 GB de RAM y sin GPU dedicada).
 
 ## 🚀 El Problema Técnico y la Solución
 
-Los modelos de lenguaje locales sufren de "amnesia" entre ejecuciones independientes. Al inyectar historiales de chat masivos para resolver esto, el costo computacional de la ventana de atención crece de forma **cuadrática** (O(N²)), saturando la CPU y forzando el uso de *Swap* en equipos de bajos recursos.
+Los modelos de lenguaje locales sufren de "amnesia" entre ejecuciones independientes. Al inyectar historiales de chat masivos para resolver esto, el costo computacional de la ventana de atención crece de forma cuadrática (O(N²)), saturando la CPU y forzando el uso de Swap en equipos de bajos recursos.
 
-Este proyecto resuelve el problema implementando un **sistema RAG jerárquico de tres niveles** sobre SQLite, actuando como un filtro inteligente que inyecta únicamente los fragmentos de memoria críticos:
+Este proyecto resuelve el problema implementando un sistema relacional jerárquico de cuatro niveles sobre SQLite, actuando como un filtro inteligente que mantiene un consumo de tokens planísimo y controlado matemáticamente:
 
-1. **Nivel 1 (Índice - Git Commit):** Una frase técnica imperativa (<150 caracteres) que mapea cronológicamente todas las sesiones pasadas.
-2. **Nivel 2 (Resumen Técnico):** Viñetas estructuradas con decisiones y datos clave generados automáticamente al cerrar la sesión.
-3. **Nivel 3 (Historial Crudo):** Los últimos mensajes de la conversación activa decodificados desde JSON.
+1. Nivel 1 (Índice - Git Commit): Una frase técnica imperativa (<100 caracteres) que indexa cronológicamente las sesiones pasadas.
+2. Nivel 2 (Resumen Técnico): Viñetas estructurales densas con decisiones de arquitectura y datos clave.
+3. Nivel 3 (Diccionario Q&A Saneado): Bloques limpios de Pregunta/Solución de código extraídos en tiempo real.
+4. Nivel 4 (Chat Crudo): Ventana deslizante efímera limitada estrictamente a las últimas interacciones vivas en la terminal.
 
 ## 🛠️ Arquitectura del Proyecto
 
@@ -49,22 +51,29 @@ El software aplica estrictamente el principio de **Responsabilidad Única** modu
 
 ```text
 .
-├── main.py                # Interfaz de línea de comandos (CLI) y orquestación.
+├── main.py                # Bucle de interacción CLI y orquestación asíncrona.
+├── auditar_db.py          # Script de diagnóstico e integridad relacional.
 ├── requirements.txt       # Dependencias congeladas del entorno.
 ├── LICENSE                # Licencia GNU GPLv3.
 └── src/
-    ├── __init__.py        # Inicializador del paquete modular.
-    ├── config.py          # Centralización de hiperparámetros de Ollama y prompts.
-    ├── database.py        # Ciclo de vida de SQLite y compilación del contexto.
-    └── model_client.py    # Abstracción del cliente de Ollama y generadores de streaming.
+    ├── __init__.py        # Inicializador del paquete.
+    ├── config.py          # Hiperparámetros de Ollama, límites de nivel y prompts.
+    ├── model_client.py    # Cliente AsyncClient de Ollama y tubería de destilación.
+    └── database/          # Submódulo relacional normalizado
+        ├── __init__.py    # Fachada única de la API de datos.
+        ├── connection.py  # Conexión física a SQLite y DDL de tablas.
+        ├── messages.py    # Persistencia inmediata del chat en vivo (Nivel 4).
+        ├── queries.py     # Consultas quirúrgicas y compilación del Prompt Maestro.
+        └── sessions.py    # Ciclo de vida y resiliencia de jornadas de trabajo.
+
 ```
 
 ## ⚡ Características Principales
 
-- **Streaming de Tokens Corregido:** Consumo dinámico de respuestas fragmento a fragmento para evitar congelamientos de interfaz en CPU.
-- **Ventana de Contexto Configurable:** Permite definir en tiempo real cuántos registros del Nivel 2 y 3 inyectar al prompt del sistema.
-- **Aprobación Humana en Bucle (HITL):** Menú interactivo antes del guardado físico para auditar, editar o descartar los resúmenes generados por la IA.
-- **Agnóstico al Modelo:** Compatible nativamente con cualquier SLM cuantizado en formato GGUF a través de Ollama (`llama3.2:1b`, `gemma3:1b`, etc.).
+- Destilación Asíncrona en Caliente: El Nivel 3 (Q&A) se procesa en segundo plano mediante asyncio.create_task inmediatamente después de cada mensaje, eliminando la sobrecarga computacional al cerrar la sesión.
+- Resiliencia y Blindaje de Datos: El chat se guarda mensaje a mensaje. Si ocurre un apagón, el sistema detecta la sesión colgada y la restaura automáticamente al reiniciar.
+- Eterno Retorno del Prompt Maestro: Compilación compacta oculta (~1,400 tokens fijos) relanzada en cada interacción para guiar la atención del modelo sin saturar su memoria.
+- Agnóstico al Modelo: Optimizado para el comportamiento y atención de SLMs cuantizados (llama3.2:1b, gemma3:1b, qwen2.5-coder, etc.).
 
 ## 📦 Instalación y Uso
 
